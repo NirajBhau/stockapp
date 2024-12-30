@@ -1,190 +1,131 @@
+import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-import streamlit as st
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
 import plotly.graph_objects as go
-from datetime import timedelta
+from plotly.subplots import make_subplots
 
-# Function to load the data
-def load_data(ticker):
-    try:
-        data = yf.download(ticker, period="5y")
-        data = data.dropna()
-        return data
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return None
+# App title
+st.title("Stock Price Prediction App")
 
-# Function to preprocess the data
-def preprocess_data(data):
-    data['100 EMA'] = data['Close'].ewm(span=100, adjust=False).mean()
-    data['200 EMA'] = data['Close'].ewm(span=200, adjust=False).mean()
-    data['Prediction'] = data['Close'].shift(-30)  # Predict for 1 month ahead
+# Sidebar options
+st.sidebar.header("Settings")
+selected_stock = st.sidebar.text_input("Enter Stock Symbol (e.g., AAPL, TSLA):", "AAPL")
+time_frame = st.sidebar.selectbox("Select Time Frame:", ["1D", "5D", "1W", "1M", "3M", "6M", "1Y"])
+prediction_days = st.sidebar.slider("Prediction Days (1-30):", min_value=1, max_value=30, value=7)
+
+# Helper function to fetch data
+def fetch_data(symbol, interval):
+    data = yf.download(symbol, interval=interval)
     return data
 
-# Function to train the model
-def train_model(data):
-    X = np.array(data[['Close']])[:-30]
-    y = np.array(data['Prediction'])[:-30]
+# Time frame mapping
+interval_mapping = {
+    "1D": "1d",
+    "5D": "5d",
+    "1W": "1wk",
+    "1M": "1mo",
+    "3M": "3mo",
+    "6M": "6mo",
+    "1Y": "1y"
+}
 
-    if len(X) == 0 or len(y) == 0:
-        return None
+# Fetch data
+st.header(f"Stock Data for {selected_stock}")
+try:
+    interval = interval_mapping[time_frame]
+    data = fetch_data(selected_stock, interval)
 
-    model = LinearRegression()
-    model.fit(X, y)
+    # Calculate EMAs
+    data['50 EMA'] = data['Close'].ewm(span=50, adjust=False).mean()
+    data['100 EMA'] = data['Close'].ewm(span=100, adjust=False).mean()
 
-    return model
-
-# Function to make predictions
-def make_predictions(model, data):
-    if model is None:
-        return None
-
-    X = np.array(data[['Close']])[-30:]
-    predictions = model.predict(X)
-    return predictions
-
-# Function to resample data for different time frames
-def resample_data(data, time_frame):
-    if time_frame == 'Daily':
-        return data
-    elif time_frame == 'Weekly':
-        return data.resample('W').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        })
-    elif time_frame == 'Monthly':
-        return data.resample('M').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        })
-    elif time_frame == 'Quarterly':
-        return data.resample('Q').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        })
-    elif time_frame == 'Yearly':
-        return data.resample('Y').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        })
-
-# Streamlit App
-st.title("Indian Stock Price Prediction")
-
-ticker = st.text_input("Enter Indian Stock Ticker Symbol (e.g., RELIANCE.NS, TCS.NS, INFY.NS)", "RELIANCE.NS")
-data = load_data(ticker)
-
-if data is not None:
-    st.subheader(f"Stock Price Data for {ticker}")
+    # Display raw data
     st.write(data.tail())
 
-    preprocessed_data = preprocess_data(data)
+    # Prepare data for charts
+    data.reset_index(inplace=True)
 
-    model = train_model(preprocessed_data)
+    # Create subplots for candlestick and volume
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
-    if model is None:
-        st.error(f"Not enough data available for {ticker} to make predictions.")
-    else:
-        predictions = make_predictions(model, preprocessed_data)
+    # Candlestick chart with EMAs
+    fig.add_trace(
+        go.Candlestick(x=data['Date'],
+                       open=data['Open'],
+                       high=data['High'],
+                       low=data['Low'],
+                       close=data['Close'],
+                       name='Candlestick'),
+        row=1, col=1
+    )
 
-        # Visualization for Stock Data with EMAs
-        st.subheader("Visualization of Stock Data with 100 EMA and 200 EMA")
-        
-        fig = go.Figure()
-        
-        fig.add_trace(go.Scatter(
-            x=preprocessed_data.index, 
-            y=preprocessed_data['Close'], 
-            mode='lines', 
-            name=f"{ticker} Close Price",
-            line=dict(color='blue')
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=preprocessed_data.index, 
-            y=preprocessed_data['100 EMA'], 
-            mode='lines', 
-            name='100 EMA',
-            line=dict(color='red')
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=preprocessed_data.index, 
-            y=preprocessed_data['200 EMA'], 
-            mode='lines', 
-            name='200 EMA',
-            line=dict(color='yellow')
-        ))
+    fig.add_trace(
+        go.Scatter(x=data['Date'], y=data['50 EMA'], mode='lines', name='50 EMA', line=dict(color='blue')),
+        row=1, col=1
+    )
 
-        fig.update_layout(
-            title=f"{ticker} Stock Price with EMA",
-            xaxis_title='Date',
-            yaxis_title='Price',
-            hovermode='x'
-        )
+    fig.add_trace(
+        go.Scatter(x=data['Date'], y=data['100 EMA'], mode='lines', name='100 EMA', line=dict(color='red')),
+        row=1, col=1
+    )
 
-        st.plotly_chart(fig)
+    # Volume bar chart
+    fig.add_trace(
+        go.Bar(x=data['Date'], y=data['Volume'], name='Volume'),
+        row=2, col=1
+    )
 
-        # Prediction Visualization
-        st.subheader("Prediction for Next 30 Days")
+    # Layout updates
+    fig.update_layout(title=f"{selected_stock} Price, EMAs, and Volume",
+                      xaxis_rangeslider_visible=False,
+                      template="plotly_white")
 
-        last_date = preprocessed_data.index[-1]
-        future_dates = [last_date + timedelta(days=i) for i in range(1, 31)]
+    # Show chart
+    st.plotly_chart(fig)
 
-        future_df = pd.DataFrame({
-            'Date': future_dates,
-            'Close': predictions
-        }).set_index('Date')
+    # Linear regression for prediction
+    st.subheader("Stock Price Prediction")
 
-        st.line_chart(future_df['Close'], height=400, use_container_width=True)
+    # Feature engineering
+    data['Day'] = np.arange(len(data))
+    X = data[['Day']]
+    y = data['Close']
 
-        # Historical vs Predicted Price Comparison
-        st.subheader("Historical vs Predicted Price Comparison")
+    # Scale data
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(X)
 
-        fig2 = go.Figure()
-        
-        fig2.add_trace(go.Scatter(
-            x=preprocessed_data.index[:-30],
-            y=preprocessed_data['Close'][:-30],
-            mode='lines',
-            name='Historical Price',
-            line=dict(color='blue')
-        ))
+    # Train test split
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-        fig2.add_trace(go.Scatter(
-            x=future_dates,
-            y=predictions,
-            mode='lines+markers',
-            name='Predicted Price',
-            line=dict(color='green', dash='dot')
-        ))
+    # Linear regression model
+    model = LinearRegression()
+    model.fit(X_train, y_train)
 
-        fig2.update_layout(
-            title=f"{ticker} Historical vs Predicted Price",
-            xaxis_title='Date',
-            yaxis_title='Price',
-            hovermode='x'
-        )
+    # Predict next 30 days
+    future_days = np.arange(len(data), len(data) + prediction_days).reshape(-1, 1)
+    future_days_scaled = scaler.transform(future_days)
+    predictions = model.predict(future_days_scaled)
 
-        st.plotly_chart(fig2)
+    # Display predictions
+    prediction_df = pd.DataFrame({"Day": future_days.flatten(), "Predicted Close": predictions})
+    st.write(prediction_df)
 
-        # Model Evaluation
-        actuals = np.array(preprocessed_data['Prediction'][-30:])
-        if len(actuals) == len(predictions):
-            r2 = r2_score(actuals, predictions)
-            st.write(f"R² score for {ticker} prediction model: {r2:.4f}")
+    # Plot predictions
+    fig_pred = go.Figure()
+    fig_pred.add_trace(go.Scatter(x=data['Date'], y=data['Close'], mode='lines', name='Actual'))
+    future_dates = pd.date_range(data['Date'].iloc[-1], periods=prediction_days + 1)[1:]
+    fig_pred.add_trace(go.Scatter(x=future_dates, y=predictions, mode='lines', name='Predicted'))
+    fig_pred.update_layout(title="Predicted vs Actual", xaxis_title="Date", yaxis_title="Price")
+    st.plotly_chart(fig_pred)
+
+    # Export option
+    csv = prediction_df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Predictions as CSV", csv, "predictions.csv", "text/csv")
+
+except Exception as e:
+    st.error(f"Error fetching data: {e}")
